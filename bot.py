@@ -2,27 +2,26 @@ import os
 import asyncpg
 import logging
 import asyncio
+from fastapi import FastAPI, Request
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
-from fastapi import FastAPI, Request
-from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
+import uvicorn
 
 # Логирование
 logging.basicConfig(level=logging.INFO)
 
+# Инициализация FastAPI
+app = FastAPI()
+
 # Переменные окружения
 TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # Адрес вебхука (например, Render)
-WEBHOOK_PATH = f"/webhook/{TOKEN}"  # Путь для вебхука
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
 # Инициализация бота и диспетчера
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
-
-# FastAPI
-app = FastAPI()
 
 # Подключение к базе данных
 async def init_db():
@@ -45,12 +44,10 @@ async def init_db():
     """)
     await conn.close()
 
-# Установка вебхука
-@dp.startup()
-async def on_startup():
-    await bot.set_webhook(WEBHOOK_URL + WEBHOOK_PATH)
-    await init_db()
-    logging.info("База данных инициализирована и вебхук установлен!")
+# Обработчик корневого маршрута
+@app.get("/")
+async def root():
+    return {"message": "Bot is running!"}
 
 # Добавление вопроса
 @dp.message(Command("add_question"))
@@ -120,14 +117,14 @@ async def check_score(message: Message):
     else:
         await message.answer("Вы ещё не участвовали в викторине!")
 
-# Webhook обработчик
-@app.post(WEBHOOK_PATH)
-async def handle_webhook(request: Request):
-    update = await request.json()
-    await dp.feed_update(bot, types.Update(**update))
-    return {"status": "ok"}
+# Запуск бота и веб-сервера
+async def main():
+    await init_db()
+    logging.info("База данных инициализирована!")
+    await bot.set_webhook(WEBHOOK_URL)
+    await dp.start_polling(bot)
 
-# Запуск FastAPI
-if __name__ == '__main__':
-    import uvicorn
+if __name__ == "__main__":
+    loop = asyncio.get_event_loop()
+    loop.create_task(main())
     uvicorn.run(app, host="0.0.0.0", port=8080)
