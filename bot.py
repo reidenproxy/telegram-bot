@@ -4,7 +4,7 @@ import logging
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.utils import executor
+import asyncio
 
 # Логирование
 logging.basicConfig(level=logging.INFO)
@@ -113,5 +113,5 @@ async def check_score(message: Message):
         await message.answer("Вы ещё не участвовали в викторине!")
 
 # Запуск бота
-if __name__ == "__main__":
-    executor.start_polling(dp, skip_updates=True)
+if __name__ == '__main__':
+    asyncio.run(main())
