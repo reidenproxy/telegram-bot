@@ -11,7 +11,11 @@ logging.basicConfig(level=logging.INFO)
 
 # Переменные окружения
 TOKEN = os.getenv("BOT_TOKEN")
-DATABASE_URL = os.getenv("postgresql://${{PGUSER}}:${{POSTGRES_PASSWORD}}@${{RAILWAY_PRIVATE_DOMAIN}}:5432/${{PGDATABASE}}")
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+# Проверка токена
+if not TOKEN:
+    raise ValueError("Ошибка: BOT_TOKEN не найден в переменных окружения!")
 
 # Инициализация бота и диспетчера
 bot = Bot(token=TOKEN)
@@ -37,12 +41,11 @@ async def init_db():
         )
     """)
     await conn.close()
+    logging.info("База данных инициализирована!")
 
-# Запуск базы данных
-@dp.startup()
+# Функция запуска
 async def on_startup():
     await init_db()
-    logging.info("База данных инициализирована!")
 
 # Добавление вопроса
 @dp.message(Command("add_question"))
@@ -112,6 +115,11 @@ async def check_score(message: Message):
     else:
         await message.answer("Вы ещё не участвовали в викторине!")
 
+# Основная функция
+async def main():
+    dp.startup.register(on_startup)
+    await dp.start_polling(bot)
+
 # Запуск бота
-if __name__ == '__main__':
+if __name__ == "__main__":
     asyncio.run(main())
