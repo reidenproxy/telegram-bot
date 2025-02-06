@@ -10,7 +10,7 @@ import asyncio
 logging.basicConfig(level=logging.INFO)
 
 # Переменные окружения
-TOKEN = os.getenv("7764737918:AAGnyZ0TnlI6ytCbV48S5vsHsoOgROZ1KwA")
+TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("postgresql://${{PGUSER}}:${{POSTGRES_PASSWORD}}@${{RAILWAY_PRIVATE_DOMAIN}}:5432/${{PGDATABASE}}")
 
 # Инициализация бота и диспетчера
