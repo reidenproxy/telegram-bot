@@ -1,10 +1,12 @@
 import os
 import asyncpg
 import logging
+import asyncio
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
-import asyncio
+from fastapi import FastAPI, Request
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 
 # Логирование
 logging.basicConfig(level=logging.INFO)
@@ -12,14 +14,15 @@ logging.basicConfig(level=logging.INFO)
 # Переменные окружения
 TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
-
-# Проверка токена
-if not TOKEN:
-    raise ValueError("Ошибка: BOT_TOKEN не найден в переменных окружения!")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # Адрес вебхука (например, Render)
+WEBHOOK_PATH = f"/webhook/{TOKEN}"  # Путь для вебхука
 
 # Инициализация бота и диспетчера
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
+
+# FastAPI
+app = FastAPI()
 
 # Подключение к базе данных
 async def init_db():
@@ -41,11 +44,13 @@ async def init_db():
         )
     """)
     await conn.close()
-    logging.info("База данных инициализирована!")
 
-# Функция запуска
+# Установка вебхука
+@dp.startup()
 async def on_startup():
+    await bot.set_webhook(WEBHOOK_URL + WEBHOOK_PATH)
     await init_db()
+    logging.info("База данных инициализирована и вебхук установлен!")
 
 # Добавление вопроса
 @dp.message(Command("add_question"))
@@ -115,11 +120,14 @@ async def check_score(message: Message):
     else:
         await message.answer("Вы ещё не участвовали в викторине!")
 
-# Основная функция
-async def main():
-    dp.startup.register(on_startup)
-    await dp.start_polling(bot)
+# Webhook обработчик
+@app.post(WEBHOOK_PATH)
+async def handle_webhook(request: Request):
+    update = await request.json()
+    await dp.feed_update(bot, types.Update(**update))
+    return {"status": "ok"}
 
-# Запуск бота
-if __name__ == "__main__":
-    asyncio.run(main())
+# Запуск FastAPI
+if __name__ == '__main__':
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8080)
