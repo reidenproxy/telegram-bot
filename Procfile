@@ -1,3 +1,1 @@
-git add Procfile
-git commit -m "Добавлен Procfile"
-git push origin main
+worker: python bot.py
