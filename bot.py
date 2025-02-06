@@ -1,130 +1,117 @@
-import asyncio
+import os
+import asyncpg
 import logging
-import aiosqlite
-from aiogram import Bot, Dispatcher, types, F
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
-from aiogram.enums import ParseMode
-from aiogram.client.default import DefaultBotProperties
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.utils import executor
 
-# Настройки
-TOKEN = "7764737918:AAGnyZ0TnlI6ytCbV48S5vsHsoOgROZ1KwA"
-bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+# Логирование
+logging.basicConfig(level=logging.INFO)
+
+# Переменные окружения
+TOKEN = os.getenv("7764737918:AAGnyZ0TnlI6ytCbV48S5vsHsoOgROZ1KwA")
+DATABASE_URL = os.getenv("postgresql://${{PGUSER}}:${{POSTGRES_PASSWORD}}@${{RAILWAY_PRIVATE_DOMAIN}}:5432/${{PGDATABASE}}")
+
+# Инициализация бота и диспетчера
+bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# Функция для подключения к БД
+# Подключение к базе данных
 async def init_db():
-    async with aiosqlite.connect("quiz.db") as db:
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS quizzes (
-                chat_id INTEGER,
-                question TEXT,
-                options TEXT,
-                correct_answer TEXT
-            )
-        """)
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS scores (
-                user_id INTEGER PRIMARY KEY,
-                username TEXT,
-                score INTEGER DEFAULT 0
-            )
-        """)
-        await db.commit()
+    conn = await asyncpg.connect(DATABASE_URL)
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS quizzes (
+            id SERIAL PRIMARY KEY,
+            chat_id BIGINT,
+            question TEXT,
+            options TEXT,
+            correct_answer TEXT
+        )
+    """)
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS scores (
+            user_id BIGINT PRIMARY KEY,
+            username TEXT,
+            score INTEGER DEFAULT 0
+        )
+    """)
+    await conn.close()
 
-# Хэндлер для создания викторины
-@dp.message(Command("создать_викторину"))
-async def create_quiz(message: Message):
-    await message.answer("Отправьте вопрос и варианты ответа в формате:\n\n"
-                         "<b>вопрос | ответ1, ответ2, ответ3 | правильный ответ</b>")
+# Запуск базы данных
+@dp.startup()
+async def on_startup():
+    await init_db()
+    logging.info("База данных инициализирована!")
 
-# Хэндлер для добавления вопроса
-@dp.message(F.text.func(lambda text: "|" in text))
+# Добавление вопроса
+@dp.message(Command("add_question"))
 async def add_question(message: Message):
     chat_id = message.chat.id
     parts = message.text.split('|')
     
     if len(parts) != 3:
-        await message.answer("Ошибка! Убедитесь, что формат правильный.")
-        return
-
-    question, options, correct_answer = map(str.strip, parts)
-
-    async with aiosqlite.connect("quiz.db") as db:
-        await db.execute("INSERT INTO quizzes VALUES (?, ?, ?, ?)", (chat_id, question, options, correct_answer))
-        await db.commit()
-
-    await message.answer("✅ Вопрос добавлен!")
-
-# Хэндлер для запуска викторины
-@dp.message(Command("старт_викторину"))
-async def start_quiz(message: Message):
-    chat_id = message.chat.id
-
-    async with aiosqlite.connect("quiz.db") as db:
-        cursor = await db.execute("SELECT question, options, correct_answer FROM quizzes WHERE chat_id=?", (chat_id,))
-        questions = await cursor.fetchall()
-
-    if not questions:
-        await message.answer("❌ Викторина не найдена. Добавьте вопросы!")
+        await message.answer("Ошибка! Формат: вопрос|варианты через запятую|правильный ответ")
         return
     
-    for question, options, correct_answer in questions:
-        markup = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [InlineKeyboardButton(text=opt.strip(), callback_data=f"answer:{opt.strip()}|{correct_answer}")]
-                for opt in options.split(',')
-            ]
-        )
-        await message.answer(question, reply_markup=markup)
+    question, options, correct_answer = map(str.strip, parts)
+    conn = await asyncpg.connect(DATABASE_URL)
+    await conn.execute("INSERT INTO quizzes (chat_id, question, options, correct_answer) VALUES ($1, $2, $3, $4)", 
+                       chat_id, question, options, correct_answer)
+    await conn.close()
+    await message.answer("✅ Вопрос добавлен!")
 
-# Хэндлер для проверки ответа
-@dp.callback_query(F.data.startswith("answer:"))
+# Начать викторину
+@dp.message(Command("quiz"))
+async def start_quiz(message: Message):
+    conn = await asyncpg.connect(DATABASE_URL)
+    row = await conn.fetchrow("SELECT * FROM quizzes WHERE chat_id = $1 ORDER BY RANDOM() LIMIT 1", message.chat.id)
+    await conn.close()
+    
+    if not row:
+        await message.answer("❌ Вопросов пока нет!")
+        return
+    
+    options = row["options"].split(',')
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=opt, callback_data=f"answer:{opt}|{row['correct_answer']}")]
+        for opt in options
+    ])
+    await message.answer(row["question"], reply_markup=keyboard)
+
+# Проверка ответа
+@dp.callback_query(lambda c: c.data.startswith("answer:"))
 async def check_answer(callback: types.CallbackQuery):
     user_answer, correct_answer = callback.data.split(":")[1].split("|")
-
+    conn = await asyncpg.connect(DATABASE_URL)
+    
     if user_answer == correct_answer:
-        async with aiosqlite.connect("quiz.db") as db:
-            cursor = await db.execute("SELECT score FROM scores WHERE user_id=?", (callback.from_user.id,))
-            row = await cursor.fetchone()
-
-            if row:
-                new_score = row[0] + 1
-                await db.execute("UPDATE scores SET score=? WHERE user_id=?", (new_score, callback.from_user.id))
-            else:
-                await db.execute("INSERT INTO scores (user_id, username, score) VALUES (?, ?, ?)",
-                                 (callback.from_user.id, callback.from_user.username, 1))
-
-            await db.commit()
-
+        row = await conn.fetchrow("SELECT score FROM scores WHERE user_id = $1", callback.from_user.id)
+        if row:
+            new_score = row["score"] + 1
+            await conn.execute("UPDATE scores SET score = $1 WHERE user_id = $2", new_score, callback.from_user.id)
+        else:
+            await conn.execute("INSERT INTO scores (user_id, username, score) VALUES ($1, $2, $3)", 
+                               callback.from_user.id, callback.from_user.username, 1)
         await callback.message.answer("✅ Правильно! +1 балл")
     else:
         await callback.message.answer("❌ Неправильно!")
-
+    
+    await conn.close()
     await callback.answer()
 
-# Хэндлер для вывода рейтинга
-@dp.message(Command("рейтинг"))
-async def show_scores(message: Message):
-    async with aiosqlite.connect("quiz.db") as db:
-        cursor = await db.execute("SELECT username, score FROM scores ORDER BY score DESC LIMIT 10")
-        rows = await cursor.fetchall()
+# Проверка счёта
+@dp.message(Command("score"))
+async def check_score(message: Message):
+    conn = await asyncpg.connect(DATABASE_URL)
+    row = await conn.fetchrow("SELECT score FROM scores WHERE user_id = $1", message.from_user.id)
+    await conn.close()
+    
+    if row:
+        await message.answer(f"🏆 Ваш счёт: {row['score']}")
+    else:
+        await message.answer("Вы ещё не участвовали в викторине!")
 
-    if not rows:
-        await message.answer("Пока никто не набрал очков.")
-        return
-
-    leaderboard = "🏆 <b>Топ игроков:</b>\n\n"
-    for i, (username, score) in enumerate(rows, start=1):
-        leaderboard += f"{i}. {username}: {score} баллов\n"
-
-    await message.answer(leaderboard)
-
-# Основная функция запуска
-async def main():
-    await init_db()
-    logging.basicConfig(level=logging.INFO)
-    await dp.start_polling(bot)
-
-if __name__ == '__main__':
-    asyncio.run(main())
+# Запуск бота
+if __name__ == "__main__":
+    executor.start_polling(dp, skip_updates=True)
