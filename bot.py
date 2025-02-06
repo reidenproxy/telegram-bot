@@ -1,53 +1,55 @@
-import os
 import logging
+import asyncio
 from aiogram import Bot, Dispatcher, types
-from aiogram.types import Message
-from aiogram.filters import CommandStart, Command
-from aiogram.utils import executor
-from dotenv import load_dotenv
+from aiogram.enums import ParseMode
+from aiogram.filters import Command, ChatMemberUpdatedFilter
+from aiogram.types import Message, ChatMemberUpdated
+from aiogram.exceptions import TelegramForbiddenError
+import os
 
-# Загрузка переменных окружения
-load_dotenv()
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN не задан. Проверь .env файл.")
+TOKEN = os.getenv("BOT_TOKEN")
 
-# Включаем логирование
-logging.basicConfig(level=logging.INFO)
-
-# Инициализация бота и диспетчера
-bot = Bot(token=BOT_TOKEN)
+bot = Bot(token=TOKEN, parse_mode=ParseMode.HTML)
 dp = Dispatcher()
 
-# Получение списка администраторов чата
-async def get_chat_admins(chat_id):
-    chat_administrators = await bot.get_chat_administrators(chat_id)
-    return [admin.user.id for admin in chat_administrators]
-
-# Проверка, является ли пользователь администратором
-async def is_admin(message: Message):
-    admins = await get_chat_admins(message.chat.id)
-    return message.from_user.id in admins
+# Фильтр для проверки админов чата
+async def is_admin(chat_id: int, user_id: int) -> bool:
+    try:
+        member = await bot.get_chat_member(chat_id, user_id)
+        return member.status in {"administrator", "creator"}
+    except TelegramForbiddenError:
+        return False
 
 # Обработчик команды /start
-@dp.message(CommandStart())
+@dp.message(Command("start"))
 async def start_command(message: Message):
-    await message.answer("Привет! Я бот для создания вопросов в чате. Только администраторы могут их добавлять.")
+    await message.answer("Привет! Я бот для создания викторин.")
 
-# Обработчик команды /ask (только для админов)
-@dp.message(Command("ask"))
-async def ask_command(message: Message):
-    if not await is_admin(message):
-        await message.answer("Вы не администратор этого чата и не можете создавать вопросы.")
+# Обработчик создания викторины (только для админов)
+@dp.message(Command("create_quiz"))
+async def create_quiz(message: Message):
+    if not await is_admin(message.chat.id, message.from_user.id):
+        await message.answer("❌ У вас нет прав на создание викторин!")
         return
     
-    question = message.text[len("/ask "):]  # Получаем текст вопроса
-    if not question:
-        await message.answer("Пожалуйста, укажите вопрос после команды /ask.")
-        return
+    quiz_question = "Какого цвета небо?"
+    options = ["Синее", "Зелёное", "Красное", "Жёлтое"]
+    correct_option = 0  # Индекс правильного ответа
     
-    await message.answer(f"Вопрос добавлен: {question}")
+    await bot.send_poll(
+        chat_id=message.from_user.id,  # Отправка викторины в личные сообщения
+        question=quiz_question,
+        options=options,
+        type="quiz",
+        correct_option_id=correct_option,
+        explanation="Потому что атмосфера рассеивает солнечный свет!",
+        is_anonymous=False
+    )
+    await message.answer("✅ Викторина создана и отправлена вам в ЛС!")
 
-# Запуск бота
+async def main():
+    logging.basicConfig(level=logging.INFO)
+    await dp.start_polling(bot)
+
 if __name__ == "__main__":
-    executor.start_polling(dp, skip_updates=True)
+    asyncio.run(main())
